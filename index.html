@@ -745,18 +745,24 @@
         return;
       }
 
-      // 1. Precise Header Meta Extraction using Multi-line Regex Patterns
-      const taskType = extractByRegex(rawText, /Task\s*Type\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const reqId = extractByRegex(rawText, /Request\s*ID\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const estTime = extractByRegex(rawText, /Estimated\s*Rating\s*Time\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const query = extractByRegex(rawText, /Query\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const vAge = extractByRegex(rawText, /Viewport\s*Age\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const locale = extractByRegex(rawText, /Locale\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const country = extractByRegex(rawText, /Country\s*[:\n\r]+\s*([^\n\r]+)/i);
-      const userLatLng = extractByRegex(rawText, /User\s*Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
+      // 1. Separate Metadata Header Area from Results
+      // Result 1 begins with a digit followed by a period or directly followed by a newline: e.g. "1." or "1\n"
+      const firstResultMatch = rawText.search(/(?:^|\n)\s*1(?:\.|\:)?\s*\n/);
+      const metaText = firstResultMatch !== -1 ? rawText.substring(0, firstResultMatch) : rawText;
+      const resultsText = firstResultMatch !== -1 ? rawText.substring(firstResultMatch) : '';
+
+      // Extract Meta Headers strictly from metaText
+      const taskType = extractByRegex(metaText, /Task\s*Type\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const reqId = extractByRegex(metaText, /Request\s*ID\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const estTime = extractByRegex(metaText, /Estimated\s*Rating\s*Time\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const query = extractByRegex(metaText, /Query\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const vAge = extractByRegex(metaText, /Viewport\s*Age\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const locale = extractByRegex(metaText, /Locale\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const country = extractByRegex(metaText, /Country\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const userLatLng = extractByRegex(metaText, /User\s*Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
 
       let mapView = '';
-      const mapMatch = rawText.match(/([0-9\.-]+,\s*[0-9\.-]+\s*:\s*\d+)/);
+      const mapMatch = metaText.match(/([0-9\.-]+,\s*[0-9\.-]+\s*:\s*\d+)/);
       if (mapMatch) mapView = mapMatch[1];
 
       document.getElementById('task-type').value = taskType;
@@ -772,91 +778,100 @@
       updateMapFrame('map-view', 'frame-map-view');
       updateMapFrame('user-latlng', 'frame-user-latlng');
 
-      const yesNavMatch = rawText.match(/Yes\s+1/i);
+      const yesNavMatch = metaText.match(/Yes\s+1/i);
       if (yesNavMatch) {
         setNav(document.getElementById('nav-btn-yes'), 'Yes');
       } else {
         setNav(document.getElementById('nav-btn-no'), 'No');
       }
 
-      // 2. Segmenting and Parsing Result Items (1, 2, 3...)
+      // 2. Segmenting and Parsing Result Items
       const resultsContainer = document.getElementById('results-container');
       resultsContainer.innerHTML = '';
       resultCounter = 0;
 
-      // Extract result blocks based on numbered delimiters (e.g. "1." or "1\n")
-      const resultBlocks = rawText.split(/(?:^|\n)(?=\d+(?:\.|\:)?\s*\n)/m);
+      if (resultsText) {
+        // Split precisely on numbered delimiters ("1.", "2.", "3.")
+        const resultBlocks = resultsText.split(/(?:^|\n)\s*(?=\d+(?:\.|\:)?\s*\n)/m);
 
-      let parsedResults = [];
+        for (let b = 0; b < resultBlocks.length; b++) {
+          const block = resultBlocks[b].trim();
+          if (!block) continue;
 
-      for (let b = 1; b < resultBlocks.length; b++) {
-        const block = resultBlocks[b].trim();
-        if (!block) continue;
+          const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+          if (lines.length < 2) continue;
 
-        const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        if (lines.length < 2) continue;
+          // Line 0 is number, Line 1 is business name
+          const name = lines[1];
 
-        // First line is index number (1., 2., etc.), Second line is Business Name
-        const name = lines[1];
-
-        let address = '';
-        const addrMatch = block.match(/Address\s*[:\n\r]+([\s\S]*?)(?=(?:Classification|Type|Status|Distance to User|$))/i);
-        if (addrMatch) {
-          address = addrMatch[1]
-            .split('\n')
-            .map(l => l.trim())
-            .filter(l => l && !l.toLowerCase().startsWith('select'))
-            .join(', ');
-        }
-
-        const classification = extractByRegex(block, /Classification\s*[:\n\r]+\s*([^\n\r]+)/i);
-        const type = extractByRegex(block, /Type\s*[:\n\r]+\s*([^\n\r]+)/i);
-        const status = extractByRegex(block, /Status\s*[:\n\r]+\s*([^\n\r]+)/i);
-        const distUser = extractByRegex(block, /Distance\s*to\s*User\s*[:\n\r]+\s*([^\n\r]+)/i);
-        const distViewport = extractByRegex(block, /Distance\s*to\s*Viewport\s*[:\n\r]+\s*([^\n\r]+)/i);
-        const latLng = extractByRegex(block, /Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
-
-        let relevance = '----';
-        let nameAcc = '----';
-        let addrAcc = '----';
-        let pinAcc = '----';
-        let comment = '';
-
-        const relRaw = extractByRegex(block, /Relevance\s*[:\n\r]+\s*([^\n\r]+)/i);
-        if (relRaw && !relRaw.toLowerCase().startsWith('select')) relevance = matchOption(relRaw, dropdownOptions.relevance);
-
-        const naRaw = extractByRegex(block, /Name\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-        if (naRaw && !naRaw.toLowerCase().startsWith('select')) nameAcc = matchOption(naRaw, dropdownOptions.nameAccuracy);
-
-        const aaRaw = extractByRegex(block, /Address\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-        if (aaRaw && !aaRaw.toLowerCase().startsWith('select')) addrAcc = matchOption(aaRaw, dropdownOptions.addressAccuracy);
-
-        const paRaw = extractByRegex(block, /Pin\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-        if (paRaw && !paRaw.toLowerCase().startsWith('select')) pinAcc = matchOption(paRaw, dropdownOptions.pinAccuracy);
-
-        const cmtMatch = block.match(/Comment\s*(?:and\s*Link)?\s*[:\n\r]+([\s\S]*)$/i);
-        if (cmtMatch) {
-          const cmtClean = cmtMatch[1].trim();
-          if (!cmtClean.toLowerCase().startsWith('select')) {
-            comment = cmtClean;
+          let address = '';
+          const addrMatch = block.match(/Address\s*[:\n\r]+([\s\S]*?)(?=(?:Classification|Type|Status|Distance to User|$))/i);
+          if (addrMatch) {
+            address = addrMatch[1]
+              .split('\n')
+              .map(l => l.trim())
+              .filter(l => l && !l.toLowerCase().startsWith('select'))
+              .join(', ');
           }
-        }
 
-        renderResultCard({
-          name,
-          address,
-          classification,
-          type,
-          status,
-          distUser,
-          distViewport,
-          latLng,
-          relevance,
-          nameAcc,
-          addrAcc,
-          pinAcc,
-          comment
-        });
+          const classification = extractByRegex(block, /Classification\s*[:\n\r]+\s*([^\n\r]+)/i);
+          const type = extractByRegex(block, /Type\s*[:\n\r]+\s*([^\n\r]+)/i);
+          
+          let status = '';
+          const statusMatch = block.match(/Status\s*[:\n\r]+([\s\S]*?)(?=(?:Distance to User|Distance to Viewport|Lat, Lng|$))/i);
+          if (statusMatch) {
+            const rawStatus = statusMatch[1].trim();
+            if (!rawStatus.toLowerCase().startsWith('distance')) {
+              status = rawStatus.split('\n')[0].trim();
+            }
+          }
+
+          const distUser = extractByRegex(block, /Distance\s*to\s*User\s*[:\n\r]+\s*([^\n\r]+)/i);
+          const distViewport = extractByRegex(block, /Distance\s*to\s*Viewport\s*[:\n\r]+\s*([^\n\r]+)/i);
+          const latLng = extractByRegex(block, /Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
+
+          let relevance = '----';
+          let nameAcc = '----';
+          let addrAcc = '----';
+          let pinAcc = '----';
+          let comment = '';
+
+          const relRaw = extractByRegex(block, /Relevance\s*[:\n\r]+\s*([^\n\r]+)/i);
+          if (relRaw && !relRaw.toLowerCase().startsWith('select')) relevance = matchOption(relRaw, dropdownOptions.relevance);
+
+          const naRaw = extractByRegex(block, /Name\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+          if (naRaw && !naRaw.toLowerCase().startsWith('select')) nameAcc = matchOption(naRaw, dropdownOptions.nameAccuracy);
+
+          const aaRaw = extractByRegex(block, /Address\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+          if (aaRaw && !aaRaw.toLowerCase().startsWith('select')) addrAcc = matchOption(aaRaw, dropdownOptions.addressAccuracy);
+
+          const paRaw = extractByRegex(block, /Pin\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+          if (paRaw && !paRaw.toLowerCase().startsWith('select')) pinAcc = matchOption(paRaw, dropdownOptions.pinAccuracy);
+
+          const cmtMatch = block.match(/Comment\s*(?:and\s*Link)?\s*[:\n\r]+([\s\S]*)$/i);
+          if (cmtMatch) {
+            const cmtClean = cmtMatch[1].trim();
+            if (!cmtClean.toLowerCase().startsWith('select')) {
+              comment = cmtClean;
+            }
+          }
+
+          renderResultCard({
+            name,
+            address,
+            classification,
+            type,
+            status,
+            distUser,
+            distViewport,
+            latLng,
+            relevance,
+            nameAcc,
+            addrAcc,
+            pinAcc,
+            comment
+          });
+        }
       }
 
       if (resultCounter === 0) {
@@ -1147,7 +1162,6 @@
         </div>
       `).join('');
 
-      // Focus map on User location or Viewport center
       const centerCoord = userLl || mapView || (items[0] ? items[0].val : '');
       if (centerCoord) {
         allFrame.src = `https://maps.google.com/maps?q=${encodeURIComponent(centerCoord)}&t=&z=12&ie=UTF8&iwloc=&output=embed`;
