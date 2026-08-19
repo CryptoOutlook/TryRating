@@ -207,11 +207,16 @@
       background: #64748b;
       color: white;
       border: none;
-      padding: 0.5rem 1rem;
+      padding: 0.5rem 0.85rem;
       border-radius: 6px;
       font-weight: 600;
       cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.15s;
     }
+
+    .btn-copy-action { background: #0f766e; }
+    .btn-copy-action:hover { background: #115e59; }
 
     .btn-export-csv { background: #0284c7; }
     .btn-export-csv:hover { background: #0369a1; }
@@ -597,6 +602,8 @@
       <button class="btn-action" onclick="resetView()">← Home / Load New Data</button>
       <div class="export-btns">
         <button class="btn-action btn-import-json" onclick="triggerImport()">📂 Load JSON</button>
+        <button class="btn-action btn-copy-action" onclick="copyDataToClipboard('json', this)">📋 Copy JSON</button>
+        <button class="btn-action btn-copy-action" onclick="copyDataToClipboard('csv', this)">📋 Copy CSV</button>
         <button class="btn-action btn-export-csv" onclick="exportData('csv')">💾 Save CSV</button>
         <button class="btn-action btn-export-json" onclick="exportData('json')">💾 Save JSON</button>
         <button class="btn-action btn-export-pdf" onclick="exportPDF()">📄 Save PDF</button>
@@ -745,13 +752,32 @@
         return;
       }
 
-      // 1. Separate Metadata Header Area from Results
-      // Result 1 begins with a digit followed by a period or directly followed by a newline: e.g. "1." or "1\n"
-      const firstResultMatch = rawText.search(/(?:^|\n)\s*1(?:\.|\:)?\s*\n/);
-      const metaText = firstResultMatch !== -1 ? rawText.substring(0, firstResultMatch) : rawText;
-      const resultsText = firstResultMatch !== -1 ? rawText.substring(firstResultMatch) : '';
+      // Step 1: Discover strictly sequential numeric boundaries (1. -> 2. -> 3. etc.)
+      const boundaryPositions = [];
+      let currentExpectedNum = 1;
+      
+      const boundaryRegex = /(?:^|\n)\s*(\d+)(?:\.|\:)?\s*\n/g;
+      let match;
+      while ((match = boundaryRegex.exec(rawText)) !== null) {
+        const foundNum = parseInt(match[1], 10);
+        if (foundNum === currentExpectedNum) {
+          boundaryPositions.push({
+            num: foundNum,
+            startIdx: match.index + (match[0].startsWith('\n') ? 1 : 0)
+          });
+          currentExpectedNum++;
+        }
+      }
 
-      // Extract Meta Headers strictly from metaText
+      // Step 2: Separate Meta Header text from Result text
+      let metaText = rawText;
+      let resultsText = '';
+
+      if (boundaryPositions.length > 0) {
+        metaText = rawText.substring(0, boundaryPositions[0].startIdx);
+        resultsText = rawText.substring(boundaryPositions[0].startIdx);
+      }
+
       const taskType = extractByRegex(metaText, /Task\s*Type\s*[:\n\r]+\s*([^\n\r]+)/i);
       const reqId = extractByRegex(metaText, /Request\s*ID\s*[:\n\r]+\s*([^\n\r]+)/i);
       const estTime = extractByRegex(metaText, /Estimated\s*Rating\s*Time\s*[:\n\r]+\s*([^\n\r]+)/i);
@@ -785,93 +811,90 @@
         setNav(document.getElementById('nav-btn-no'), 'No');
       }
 
-      // 2. Segmenting and Parsing Result Items
+      // Step 3: Extract accurately bounded result blocks
       const resultsContainer = document.getElementById('results-container');
       resultsContainer.innerHTML = '';
       resultCounter = 0;
 
-      if (resultsText) {
-        // Split precisely on numbered delimiters ("1.", "2.", "3.")
-        const resultBlocks = resultsText.split(/(?:^|\n)\s*(?=\d+(?:\.|\:)?\s*\n)/m);
+      for (let i = 0; i < boundaryPositions.length; i++) {
+        const start = boundaryPositions[i].startIdx;
+        const end = (i + 1 < boundaryPositions.length) ? boundaryPositions[i + 1].startIdx : rawText.length;
+        const block = rawText.substring(start, end).trim();
+        if (!block) continue;
 
-        for (let b = 0; b < resultBlocks.length; b++) {
-          const block = resultBlocks[b].trim();
-          if (!block) continue;
+        const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        if (lines.length < 2) continue;
 
-          const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-          if (lines.length < 2) continue;
+        // Line 0 is the boundary digit ("1." or "1"), Line 1 is the Business Name
+        const name = lines[1];
 
-          // Line 0 is number, Line 1 is business name
-          const name = lines[1];
-
-          let address = '';
-          const addrMatch = block.match(/Address\s*[:\n\r]+([\s\S]*?)(?=(?:Classification|Type|Status|Distance to User|$))/i);
-          if (addrMatch) {
-            address = addrMatch[1]
-              .split('\n')
-              .map(l => l.trim())
-              .filter(l => l && !l.toLowerCase().startsWith('select'))
-              .join(', ');
-          }
-
-          const classification = extractByRegex(block, /Classification\s*[:\n\r]+\s*([^\n\r]+)/i);
-          const type = extractByRegex(block, /Type\s*[:\n\r]+\s*([^\n\r]+)/i);
-          
-          let status = '';
-          const statusMatch = block.match(/Status\s*[:\n\r]+([\s\S]*?)(?=(?:Distance to User|Distance to Viewport|Lat, Lng|$))/i);
-          if (statusMatch) {
-            const rawStatus = statusMatch[1].trim();
-            if (!rawStatus.toLowerCase().startsWith('distance')) {
-              status = rawStatus.split('\n')[0].trim();
-            }
-          }
-
-          const distUser = extractByRegex(block, /Distance\s*to\s*User\s*[:\n\r]+\s*([^\n\r]+)/i);
-          const distViewport = extractByRegex(block, /Distance\s*to\s*Viewport\s*[:\n\r]+\s*([^\n\r]+)/i);
-          const latLng = extractByRegex(block, /Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
-
-          let relevance = '----';
-          let nameAcc = '----';
-          let addrAcc = '----';
-          let pinAcc = '----';
-          let comment = '';
-
-          const relRaw = extractByRegex(block, /Relevance\s*[:\n\r]+\s*([^\n\r]+)/i);
-          if (relRaw && !relRaw.toLowerCase().startsWith('select')) relevance = matchOption(relRaw, dropdownOptions.relevance);
-
-          const naRaw = extractByRegex(block, /Name\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-          if (naRaw && !naRaw.toLowerCase().startsWith('select')) nameAcc = matchOption(naRaw, dropdownOptions.nameAccuracy);
-
-          const aaRaw = extractByRegex(block, /Address\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-          if (aaRaw && !aaRaw.toLowerCase().startsWith('select')) addrAcc = matchOption(aaRaw, dropdownOptions.addressAccuracy);
-
-          const paRaw = extractByRegex(block, /Pin\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
-          if (paRaw && !paRaw.toLowerCase().startsWith('select')) pinAcc = matchOption(paRaw, dropdownOptions.pinAccuracy);
-
-          const cmtMatch = block.match(/Comment\s*(?:and\s*Link)?\s*[:\n\r]+([\s\S]*)$/i);
-          if (cmtMatch) {
-            const cmtClean = cmtMatch[1].trim();
-            if (!cmtClean.toLowerCase().startsWith('select')) {
-              comment = cmtClean;
-            }
-          }
-
-          renderResultCard({
-            name,
-            address,
-            classification,
-            type,
-            status,
-            distUser,
-            distViewport,
-            latLng,
-            relevance,
-            nameAcc,
-            addrAcc,
-            pinAcc,
-            comment
-          });
+        let address = '';
+        const addrMatch = block.match(/Address\s*[:\n\r]+([\s\S]*?)(?=(?:Classification|Type|Status|Distance to User|Distance to Viewport|Lat, Lng|$))/i);
+        if (addrMatch) {
+          address = addrMatch[1]
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l && !l.toLowerCase().startsWith('select'))
+            .join(', ');
         }
+
+        const classification = extractByRegex(block, /Classification\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const type = extractByRegex(block, /Type\s*[:\n\r]+\s*([^\n\r]+)/i);
+        
+        let status = '';
+        const statusMatch = block.match(/Status\s*[:\n\r]+([\s\S]*?)(?=(?:Distance to User|Distance to Viewport|Lat, Lng|$))/i);
+        if (statusMatch) {
+          const rawStatus = statusMatch[1].trim();
+          if (!rawStatus.toLowerCase().startsWith('distance') && !rawStatus.toLowerCase().startsWith('lat')) {
+            status = rawStatus.split('\n')[0].trim();
+          }
+        }
+
+        const distUser = extractByRegex(block, /Distance\s*to\s*User\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const distViewport = extractByRegex(block, /Distance\s*to\s*Viewport\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const latLng = extractByRegex(block, /Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
+
+        let relevance = '----';
+        let nameAcc = '----';
+        let addrAcc = '----';
+        let pinAcc = '----';
+        let comment = '';
+
+        const relRaw = extractByRegex(block, /Relevance\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (relRaw && !relRaw.toLowerCase().startsWith('select')) relevance = matchOption(relRaw, dropdownOptions.relevance);
+
+        const naRaw = extractByRegex(block, /Name\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (naRaw && !naRaw.toLowerCase().startsWith('select')) nameAcc = matchOption(naRaw, dropdownOptions.nameAccuracy);
+
+        const aaRaw = extractByRegex(block, /Address\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (aaRaw && !aaRaw.toLowerCase().startsWith('select')) addrAcc = matchOption(aaRaw, dropdownOptions.addressAccuracy);
+
+        const paRaw = extractByRegex(block, /Pin\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (paRaw && !paRaw.toLowerCase().startsWith('select')) pinAcc = matchOption(paRaw, dropdownOptions.pinAccuracy);
+
+        const cmtMatch = block.match(/Comment\s*(?:and\s*Link)?\s*[:\n\r]+([\s\S]*)$/i);
+        if (cmtMatch) {
+          const cmtClean = cmtMatch[1].trim();
+          if (!cmtClean.toLowerCase().startsWith('select')) {
+            comment = cmtClean;
+          }
+        }
+
+        renderResultCard({
+          name,
+          address,
+          classification,
+          type,
+          status,
+          distUser,
+          distViewport,
+          latLng,
+          relevance,
+          nameAcc,
+          addrAcc,
+          pinAcc,
+          comment
+        });
       }
 
       if (resultCounter === 0) {
@@ -1435,6 +1458,63 @@
       return { queryInfo: meta, results: results };
     }
 
+    function generateCSVString(payload) {
+      let csv = [];
+      csv.push(['Task & Query Info Header']);
+      csv.push(['Task Type', payload.queryInfo.taskType]);
+      csv.push(['Request ID', payload.queryInfo.requestId]);
+      csv.push(['Estimated Time', payload.queryInfo.estimatedTime]);
+      csv.push(['Query', payload.queryInfo.query]);
+      csv.push(['Viewport Age', payload.queryInfo.viewportAge]);
+      csv.push(['Locale', payload.queryInfo.locale]);
+      csv.push(['Country', payload.queryInfo.country]);
+      csv.push(['Map View', payload.queryInfo.mapView]);
+      csv.push(['User Lat/Lng', payload.queryInfo.userLatLng]);
+      csv.push(['Navigational Result?', payload.queryInfo.navigationalResult]);
+      csv.push([]);
+      
+      csv.push([
+        'Result #', 'Original Name', 'Verified Online Name', 'Original Address', 'Verified Online Address',
+        'Combined Name & Address', 'Classification', 'Type', 'Status', 'Dist User', 'Dist Viewport', 
+        'Lat, Lng', 'Unexpected Language/Script', 'Closed/Does Not Exist', 'Relevance', 
+        'Name Accuracy', 'Address Accuracy', 'Pin Accuracy', 'Comment'
+      ]);
+
+      payload.results.forEach(r => {
+        csv.push([
+          r.id, r.name, r.verifiedName, r.address, r.verifiedAddress, r.combinedNameAddress,
+          r.classification, r.type, r.status, r.distUser, r.distViewport, r.latLng,
+          r.unexpectedScript ? 'Yes' : 'No', r.closedOrDoesNotExist ? 'Yes' : 'No',
+          r.relevance, r.nameAccuracy, r.addressAccuracy, r.pinAccuracy, r.comment
+        ]);
+      });
+
+      return csv.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+    }
+
+    async function copyDataToClipboard(format, btn) {
+      saveCurrentToHistory();
+      const payload = getCurrentPayload();
+      let textToCopy = '';
+
+      if (format === 'json') {
+        textToCopy = JSON.stringify(payload, null, 2);
+      } else if (format === 'csv') {
+        textToCopy = generateCSVString(payload);
+      }
+
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        const origText = btn.innerText;
+        btn.innerText = '✅ Copied!';
+        setTimeout(() => {
+          btn.innerText = origText;
+        }, 1400);
+      } catch (err) {
+        alert('Failed to copy to clipboard.');
+      }
+    }
+
     function saveCurrentToHistory() {
       const payload = getCurrentPayload();
       if (!payload.queryInfo.query && !payload.queryInfo.requestId) return;
@@ -1510,37 +1590,7 @@
         const jsonStr = JSON.stringify(payload, null, 2);
         downloadFile(jsonStr, `${filename}.json`, 'application/json');
       } else if (format === 'csv') {
-        let csv = [];
-        csv.push(['Task & Query Info Header']);
-        csv.push(['Task Type', payload.queryInfo.taskType]);
-        csv.push(['Request ID', payload.queryInfo.requestId]);
-        csv.push(['Estimated Time', payload.queryInfo.estimatedTime]);
-        csv.push(['Query', payload.queryInfo.query]);
-        csv.push(['Viewport Age', payload.queryInfo.viewportAge]);
-        csv.push(['Locale', payload.queryInfo.locale]);
-        csv.push(['Country', payload.queryInfo.country]);
-        csv.push(['Map View', payload.queryInfo.mapView]);
-        csv.push(['User Lat/Lng', payload.queryInfo.userLatLng]);
-        csv.push(['Navigational Result?', payload.queryInfo.navigationalResult]);
-        csv.push([]);
-        
-        csv.push([
-          'Result #', 'Original Name', 'Verified Online Name', 'Original Address', 'Verified Online Address',
-          'Combined Name & Address', 'Classification', 'Type', 'Status', 'Dist User', 'Dist Viewport', 
-          'Lat, Lng', 'Unexpected Language/Script', 'Closed/Does Not Exist', 'Relevance', 
-          'Name Accuracy', 'Address Accuracy', 'Pin Accuracy', 'Comment'
-        ]);
-
-        payload.results.forEach(r => {
-          csv.push([
-            r.id, r.name, r.verifiedName, r.address, r.verifiedAddress, r.combinedNameAddress,
-            r.classification, r.type, r.status, r.distUser, r.distViewport, r.latLng,
-            r.unexpectedScript ? 'Yes' : 'No', r.closedOrDoesNotExist ? 'Yes' : 'No',
-            r.relevance, r.nameAccuracy, r.addressAccuracy, r.pinAccuracy, r.comment
-          ]);
-        });
-
-        const csvString = csv.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+        const csvString = generateCSVString(payload);
         downloadFile(csvString, `${filename}.csv`, 'text/csv;charset=utf-8;');
       }
     }
