@@ -227,7 +227,7 @@
 
     .hidden { display: none !important; }
 
-    .query-box {
+    .query-box, .overview-box {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -236,7 +236,7 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
 
-    .query-header {
+    .query-header, .overview-header {
       font-weight: 700;
       font-size: 1.1rem;
       margin-bottom: 0.75rem;
@@ -491,6 +491,31 @@
       display: block;
     }
 
+    /* All Coordinates Card Styles */
+    .coord-item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f8fafc;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 0.5rem;
+    }
+
+    .coord-label {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    .coord-val {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: var(--primary);
+      margin: 0 0.5rem;
+    }
+
     .add-btn-container {
       text-align: center;
       margin: 2rem 0;
@@ -519,7 +544,7 @@
         display: none !important;
       }
 
-      .result-card, .query-box {
+      .result-card, .query-box, .overview-box {
         box-shadow: none !important;
         border: 1px solid #ccc !important;
         page-break-inside: avoid;
@@ -641,7 +666,7 @@
               <button class="btn-icon" title="Open Maps" onclick="openMap('map-view')">🗺️</button>
             </div>
           </div>
-          <input type="text" id="map-view" oninput="updateMapFrame('map-view', 'frame-map-view')">
+          <input type="text" id="map-view" oninput="updateMapFrame('map-view', 'frame-map-view'); refreshAllCoordsOverview();">
           <div class="map-grid-container">
             <iframe id="frame-map-view" src="about:blank" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
           </div>
@@ -654,7 +679,7 @@
               <button class="btn-icon" title="Open Maps" onclick="openMap('user-latlng')">🗺️</button>
             </div>
           </div>
-          <input type="text" id="user-latlng" oninput="updateMapFrame('user-latlng', 'frame-user-latlng')">
+          <input type="text" id="user-latlng" oninput="updateMapFrame('user-latlng', 'frame-user-latlng'); refreshAllCoordsOverview();">
           <div class="map-grid-container">
             <iframe id="frame-user-latlng" src="about:blank" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
           </div>
@@ -670,6 +695,16 @@
       </div>
     </div>
 
+    <!-- ALL COORDINATES OVERVIEW CARD -->
+    <div class="overview-box" id="all-coords-box">
+      <div class="overview-header">📍 All Results Coordinates Overview</div>
+      <div id="all-coords-list"></div>
+      <div class="map-grid-container" style="margin-top: 1rem;">
+        <iframe id="frame-all-coords" src="about:blank" loading="lazy" referrerpolicy="no-referrer-when-downgrade" style="height: 280px;"></iframe>
+      </div>
+    </div>
+
+    <!-- RESULT EVALUATION CARDS -->
     <div id="results-container"></div>
 
     <div class="add-btn-container">
@@ -694,60 +729,31 @@
       renderHistoryList();
     });
 
-    function cleanLine(l) {
-      return l ? l.replace(/[\r\t]+/g, ' ').trim() : '';
+    function cleanString(str) {
+      return str ? str.replace(/\r/g, '').trim() : '';
     }
 
-    function isResultBoundary(line) {
-      return /^(\d+)(\.|\:)?$/.test(line);
-    }
-
-    function isKnownFieldHeader(line) {
-      const lower = line.toLowerCase();
-      const keys = [
-        'address', 'classification', 'type', 'status', 'distance to user',
-        'distance to viewport', 'lat, lng', 'lat,lng', 'result name',
-        'business/poi', 'relevance', 'name accuracy', 'address accuracy',
-        'pin accuracy', 'comment and link', 'comment'
-      ];
-      return keys.some(k => lower === k || lower.startsWith(k + ' ') || lower.startsWith(k + ':') || lower.startsWith(k + '\t'));
+    function extractByRegex(text, pattern) {
+      const match = text.match(pattern);
+      return match ? match[1].trim() : '';
     }
 
     function processRawData() {
-      const rawText = document.getElementById('raw-input').value;
-      if (!rawText.trim()) {
+      const rawText = cleanString(document.getElementById('raw-input').value);
+      if (!rawText) {
         alert('Please paste some raw text first!');
         return;
       }
 
-      const rawLines = rawText.split('\n').map(cleanLine).filter(l => l.length > 0 && l !== 'VB');
-
-      // Helper to retrieve meta header properties
-      function getMeta(targetKey) {
-        for (let idx = 0; idx < rawLines.length; idx++) {
-          const l = rawLines[idx];
-          if (isResultBoundary(l)) break; // stop at first result boundary
-          const lower = l.toLowerCase();
-
-          if (lower === targetKey || lower.startsWith(targetKey + ' ') || lower.startsWith(targetKey + ':')) {
-            const inline = l.replace(new RegExp('^' + targetKey + '[\\s\\:]*', 'i'), '').trim();
-            if (inline) return inline;
-            if (idx + 1 < rawLines.length && !isKnownFieldHeader(rawLines[idx + 1]) && !isResultBoundary(rawLines[idx + 1])) {
-              return rawLines[idx + 1];
-            }
-          }
-        }
-        return '';
-      }
-
-      const taskType = getMeta('task type');
-      const reqId = getMeta('request id');
-      const estTime = getMeta('estimated rating time');
-      const query = getMeta('query');
-      const vAge = getMeta('viewport age');
-      const locale = getMeta('locale');
-      const country = getMeta('country');
-      const userLatLng = getMeta('user lat, lng') || getMeta('user lat,lng');
+      // 1. Precise Header Meta Extraction using Multi-line Regex Patterns
+      const taskType = extractByRegex(rawText, /Task\s*Type\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const reqId = extractByRegex(rawText, /Request\s*ID\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const estTime = extractByRegex(rawText, /Estimated\s*Rating\s*Time\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const query = extractByRegex(rawText, /Query\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const vAge = extractByRegex(rawText, /Viewport\s*Age\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const locale = extractByRegex(rawText, /Locale\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const country = extractByRegex(rawText, /Country\s*[:\n\r]+\s*([^\n\r]+)/i);
+      const userLatLng = extractByRegex(rawText, /User\s*Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
 
       let mapView = '';
       const mapMatch = rawText.match(/([0-9\.-]+,\s*[0-9\.-]+\s*:\s*\d+)/);
@@ -766,195 +772,100 @@
       updateMapFrame('map-view', 'frame-map-view');
       updateMapFrame('user-latlng', 'frame-user-latlng');
 
-      const yesNavMatch = rawText.match(/Yes[\t\s]+1/i);
+      const yesNavMatch = rawText.match(/Yes\s+1/i);
       if (yesNavMatch) {
         setNav(document.getElementById('nav-btn-yes'), 'Yes');
       } else {
         setNav(document.getElementById('nav-btn-no'), 'No');
       }
 
+      // 2. Segmenting and Parsing Result Items (1, 2, 3...)
       const resultsContainer = document.getElementById('results-container');
       resultsContainer.innerHTML = '';
       resultCounter = 0;
 
-      // Locate where Result 1 starts
-      let firstResultIndex = -1;
-      for (let idx = 0; idx < rawLines.length; idx++) {
-        if (/^1(\.|\:)?$/.test(rawLines[idx])) {
-          firstResultIndex = idx;
-          break;
+      // Extract result blocks based on numbered delimiters (e.g. "1." or "1\n")
+      const resultBlocks = rawText.split(/(?:^|\n)(?=\d+(?:\.|\:)?\s*\n)/m);
+
+      let parsedResults = [];
+
+      for (let b = 1; b < resultBlocks.length; b++) {
+        const block = resultBlocks[b].trim();
+        if (!block) continue;
+
+        const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        if (lines.length < 2) continue;
+
+        // First line is index number (1., 2., etc.), Second line is Business Name
+        const name = lines[1];
+
+        let address = '';
+        const addrMatch = block.match(/Address\s*[:\n\r]+([\s\S]*?)(?=(?:Classification|Type|Status|Distance to User|$))/i);
+        if (addrMatch) {
+          address = addrMatch[1]
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l && !l.toLowerCase().startsWith('select'))
+            .join(', ');
         }
-      }
 
-      if (firstResultIndex !== -1) {
-        let i = firstResultIndex;
+        const classification = extractByRegex(block, /Classification\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const type = extractByRegex(block, /Type\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const status = extractByRegex(block, /Status\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const distUser = extractByRegex(block, /Distance\s*to\s*User\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const distViewport = extractByRegex(block, /Distance\s*to\s*Viewport\s*[:\n\r]+\s*([^\n\r]+)/i);
+        const latLng = extractByRegex(block, /Lat,\s*Lng\s*[:\n\r]+\s*([0-9\.-]+,\s*[0-9\.-]+)/i);
 
-        while (i < rawLines.length) {
-          if (isResultBoundary(rawLines[i])) {
-            i++; // skip the index number
+        let relevance = '----';
+        let nameAcc = '----';
+        let addrAcc = '----';
+        let pinAcc = '----';
+        let comment = '';
 
-            // Business Name is the next line
-            let name = '';
-            if (i < rawLines.length && !isKnownFieldHeader(rawLines[i]) && !isResultBoundary(rawLines[i])) {
-              name = rawLines[i];
-              i++;
-            }
+        const relRaw = extractByRegex(block, /Relevance\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (relRaw && !relRaw.toLowerCase().startsWith('select')) relevance = matchOption(relRaw, dropdownOptions.relevance);
 
-            let addressLines = [];
-            let classification = '';
-            let type = '';
-            let status = '';
-            let distUser = '';
-            let distViewport = '';
-            let latLng = '';
-            let relevance = '----';
-            let nameAcc = '----';
-            let addrAcc = '----';
-            let pinAcc = '----';
-            let comment = '';
+        const naRaw = extractByRegex(block, /Name\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (naRaw && !naRaw.toLowerCase().startsWith('select')) nameAcc = matchOption(naRaw, dropdownOptions.nameAccuracy);
 
-            while (i < rawLines.length && !isResultBoundary(rawLines[i])) {
-              const line = rawLines[i];
-              const lower = line.toLowerCase();
+        const aaRaw = extractByRegex(block, /Address\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (aaRaw && !aaRaw.toLowerCase().startsWith('select')) addrAcc = matchOption(aaRaw, dropdownOptions.addressAccuracy);
 
-              // Address Extraction
-              if (lower === 'address' || (lower.startsWith('address') && !lower.startsWith('address accuracy'))) {
-                let inline = line.replace(/^address[\s\:]*/i, '').trim();
-                if (inline) addressLines.push(inline);
-                i++;
-                while (i < rawLines.length && !isKnownFieldHeader(rawLines[i]) && !isResultBoundary(rawLines[i])) {
-                  addressLines.push(rawLines[i]);
-                  if (rawLines[i].toLowerCase().includes('united states')) {
-                    i++;
-                    break;
-                  }
-                  i++;
-                }
-                continue;
-              }
-              // Classification
-              else if (lower.startsWith('classification')) {
-                let inline = line.replace(/^classification[\s\:]*/i, '').trim();
-                if (inline) classification = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  classification = rawLines[++i];
-                }
-              }
-              // Type
-              else if (lower === 'type' || (lower.startsWith('type') && !lower.startsWith('task type'))) {
-                let inline = line.replace(/^type[\s\:]*/i, '').trim();
-                if (inline) type = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  type = rawLines[++i];
-                }
-              }
-              // Status
-              else if (lower.startsWith('status')) {
-                let inline = line.replace(/^status[\s\:]*/i, '').trim();
-                if (inline) status = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  status = rawLines[++i];
-                }
-              }
-              // Distance to User
-              else if (lower.startsWith('distance to user')) {
-                let inline = line.replace(/^distance to user[\s\:]*/i, '').trim();
-                if (inline) distUser = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  distUser = rawLines[++i];
-                }
-              }
-              // Distance to Viewport
-              else if (lower.startsWith('distance to viewport')) {
-                let inline = line.replace(/^distance to viewport[\s\:]*/i, '').trim();
-                if (inline) distViewport = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  distViewport = rawLines[++i];
-                }
-              }
-              // Lat, Lng
-              else if (lower.startsWith('lat, lng') || lower.startsWith('lat,lng')) {
-                let inline = line.replace(/^lat,\s*lng[\s\:]*/i, '').trim();
-                if (inline) latLng = inline;
-                else if (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1])) {
-                  latLng = rawLines[++i];
-                }
-              }
-              // Relevance
-              else if (lower.startsWith('relevance')) {
-                let inline = line.replace(/^relevance[\s\:]*/i, '').trim();
-                let val = inline || (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1]) ? rawLines[++i] : '');
-                if (!val.toLowerCase().startsWith('select')) {
-                  relevance = matchOption(val, dropdownOptions.relevance);
-                }
-              }
-              // Name Accuracy
-              else if (lower.startsWith('name accuracy')) {
-                let inline = line.replace(/^name accuracy[\s\:]*/i, '').trim();
-                let val = inline || (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1]) ? rawLines[++i] : '');
-                if (!val.toLowerCase().startsWith('select')) {
-                  nameAcc = matchOption(val, dropdownOptions.nameAccuracy);
-                }
-              }
-              // Address Accuracy
-              else if (lower.startsWith('address accuracy')) {
-                let inline = line.replace(/^address accuracy[\s\:]*/i, '').trim();
-                let val = inline || (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1]) ? rawLines[++i] : '');
-                if (!val.toLowerCase().startsWith('select')) {
-                  addrAcc = matchOption(val, dropdownOptions.addressAccuracy);
-                }
-              }
-              // Pin Accuracy
-              else if (lower.startsWith('pin accuracy')) {
-                let inline = line.replace(/^pin accuracy[\s\:]*/i, '').trim();
-                let val = inline || (i + 1 < rawLines.length && !isKnownFieldHeader(rawLines[i + 1]) && !isResultBoundary(rawLines[i + 1]) ? rawLines[++i] : '');
-                if (!val.toLowerCase().startsWith('select')) {
-                  pinAcc = matchOption(val, dropdownOptions.pinAccuracy);
-                }
-              }
-              // Comment and Link
-              else if (lower.startsWith('comment and link') || lower.startsWith('comment')) {
-                let cmtLines = [];
-                let inline = line.replace(/^comment( and link)?[\s\:]*/i, '').trim();
-                if (inline && !inline.toLowerCase().startsWith('select')) cmtLines.push(inline);
-                i++;
-                while (i < rawLines.length && !isResultBoundary(rawLines[i])) {
-                  if (isKnownFieldHeader(rawLines[i])) break;
-                  if (!rawLines[i].toLowerCase().startsWith('select')) {
-                    cmtLines.push(rawLines[i]);
-                  }
-                  i++;
-                }
-                comment = cmtLines.join('\n').trim();
-                continue;
-              }
-              i++;
-            }
+        const paRaw = extractByRegex(block, /Pin\s*Accuracy\s*[:\n\r]+\s*([^\n\r]+)/i);
+        if (paRaw && !paRaw.toLowerCase().startsWith('select')) pinAcc = matchOption(paRaw, dropdownOptions.pinAccuracy);
 
-            renderResultCard({
-              name,
-              address: addressLines.join(', '),
-              classification,
-              type,
-              status,
-              distUser,
-              distViewport,
-              latLng,
-              relevance,
-              nameAcc,
-              addrAcc,
-              pinAcc,
-              comment
-            });
-          } else {
-            i++;
+        const cmtMatch = block.match(/Comment\s*(?:and\s*Link)?\s*[:\n\r]+([\s\S]*)$/i);
+        if (cmtMatch) {
+          const cmtClean = cmtMatch[1].trim();
+          if (!cmtClean.toLowerCase().startsWith('select')) {
+            comment = cmtClean;
           }
         }
-      } else {
+
+        renderResultCard({
+          name,
+          address,
+          classification,
+          type,
+          status,
+          distUser,
+          distViewport,
+          latLng,
+          relevance,
+          nameAcc,
+          addrAcc,
+          pinAcc,
+          comment
+        });
+      }
+
+      if (resultCounter === 0) {
         renderResultCard({});
       }
 
+      refreshAllCoordsOverview();
       saveCurrentToHistory();
+
       document.getElementById('parser-view').classList.add('hidden');
       document.getElementById('workspace-view').classList.remove('hidden');
     }
@@ -1129,7 +1040,7 @@
                   <button class="btn-icon" title="Open Maps" onclick="openMap('res-ll-${id}')">🗺️</button>
                 </div>
               </div>
-              <input type="text" id="res-ll-${id}" value="${latLng}" oninput="updateCombinedFields(${id}); updateMapFrame('res-ll-${id}', 'frame-res-ll-${id}');">
+              <input type="text" id="res-ll-${id}" value="${latLng}" oninput="updateCombinedFields(${id}); updateMapFrame('res-ll-${id}', 'frame-res-ll-${id}'); refreshAllCoordsOverview();">
               <div class="map-grid-container">
                 <iframe id="frame-res-ll-${id}" src="about:blank" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
               </div>
@@ -1196,11 +1107,59 @@
       compareFields(id);
     }
 
+    function refreshAllCoordsOverview() {
+      const listContainer = document.getElementById('all-coords-list');
+      const allFrame = document.getElementById('frame-all-coords');
+      if (!listContainer || !allFrame) return;
+
+      const userLl = (document.getElementById('user-latlng')?.value || '').trim();
+      let mapView = (document.getElementById('map-view')?.value || '').trim();
+      if (mapView.includes(':')) mapView = mapView.split(':')[0].trim();
+
+      const items = [];
+      if (userLl) items.push({ title: 'User Location', val: userLl });
+      if (mapView) items.push({ title: 'Viewport Center', val: mapView });
+
+      const cards = document.querySelectorAll('.result-card');
+      cards.forEach(card => {
+        const id = card.id.replace('card-', '');
+        const name = (document.getElementById(`res-name-${id}`)?.value || `Result #${id}`).trim();
+        const ll = (document.getElementById(`res-ll-${id}`)?.value || '').trim();
+        if (ll) {
+          items.push({ title: `#${id} ${name}`, val: ll });
+        }
+      });
+
+      if (items.length === 0) {
+        listContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No coordinates available.</div>';
+        allFrame.src = 'about:blank';
+        return;
+      }
+
+      listContainer.innerHTML = items.map(item => `
+        <div class="coord-item-row">
+          <span class="coord-label">${item.title}</span>
+          <div>
+            <span class="coord-val">${item.val}</span>
+            <button class="btn-icon" title="Copy" onclick="navigator.clipboard.writeText('${item.val}')">📋</button>
+            <button class="btn-icon" title="Open Map" onclick="window.open('https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.val)}', '_blank')">🗺️</button>
+          </div>
+        </div>
+      `).join('');
+
+      // Focus map on User location or Viewport center
+      const centerCoord = userLl || mapView || (items[0] ? items[0].val : '');
+      if (centerCoord) {
+        allFrame.src = `https://maps.google.com/maps?q=${encodeURIComponent(centerCoord)}&t=&z=12&ie=UTF8&iwloc=&output=embed`;
+      }
+    }
+
     function deleteCard(id) {
       const card = document.getElementById(`card-${id}`);
       if (!card) return;
       if (confirm(`Are you sure you want to delete Result card #${id}?`)) {
         card.remove();
+        refreshAllCoordsOverview();
         saveCurrentToHistory();
       }
     }
@@ -1341,6 +1300,7 @@
 
     function addNewResult() {
       renderResultCard({});
+      refreshAllCoordsOverview();
     }
 
     function triggerImport() {
@@ -1399,6 +1359,7 @@
         renderResultCard(res);
       });
 
+      refreshAllCoordsOverview();
       document.getElementById('parser-view').classList.add('hidden');
       document.getElementById('workspace-view').classList.remove('hidden');
     }
